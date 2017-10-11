@@ -4,6 +4,9 @@ import os
 import sys
 from pdb import set_trace
 from mnist import MNIST
+import tensorflow as tf
+
+NUM_DIGITS = 2
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
@@ -11,6 +14,11 @@ def eprint(*args, **kwargs):
 def load_mnist(path):
     mndata = MNIST(path)
     mnist = mndata.load_training()
+    return mnist
+
+def load_mnist_test(path):
+    mndata = MNIST(path)
+    mnist = mndata.load_testing()
     return mnist
 
 def mnist_label_to_image(mnist):
@@ -29,20 +37,19 @@ def mnist_label_to_image(mnist):
     return y_to_x
 
 def state_to_image(episode, label_to_im_dict):
-    final_episode = list()
-    for (state, action, reward_lab, qval_lab) in episode:
+    for (j, (state, action, reward_lab, qval_lab)) in enumerate(episode):
         final_im = np.zeros((28, 28, len(state)))
         for (i, num) in enumerate(state):
             im_index = np.random.randint(len(label_to_im_dict[num]))
             im = label_to_im_dict[num][im_index].reshape((28, 28))
             final_im[:, :, i] = im
-        final_episode.append(final_im, action) 
+        episode[j][0] = final_im
+    return episode
 
-def main():
-    mnist = load_mnist('data/') 
-    mnist_label_to_image(mnist, 100)
+def conv_layer(input, num_outputs, kernel_size, stride=1):
+    return tf.contrib.layers.conv2d(input, num_outputs=num_outputs,
+        kernel_size=kernel_size, stride=stride, weights_regularizer=tf.nn.l2_loss)
 
-if __name__=='__main__':
-    main()
-
-    
+def fc_layer(input, n, activation_fn=tf.nn.relu):
+    return tf.contrib.layers.fully_connected(input, n, activation_fn=activation_fn, \
+        weights_regularizer=tf.nn.l2_loss)  

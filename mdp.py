@@ -1,23 +1,24 @@
 from util import *
 import numpy as np
 
-NUM_DIGITS = 1
-
 class MNISTMDP(object):
 
 
     def __init__(self, num_digits, deterministic=True):
         self.num_digits = num_digits
         self.deterministic = deterministic
-        self.initial_state = tuple([0 for i in range(self.num_digits)])
+        #self.initial_state = tuple([5 for i in range(self.num_digits)])
+        self.initial_state = tuple([np.random.randint(10) for i in range(self.num_digits)])
         self.terminal_state = tuple([9 for i in range(self.num_digits)])
+        self.terminal_state2 = tuple([0 for i in range(self.num_digits)])
         self.goal_state = tuple(['GOAL'])
         self.current_state = self.initial_state
 
         self.invalid_reward = -5
-        self.goal_reward = 1000
+        self.goal_reward = 10
 
     def reset(self):
+        self.initial_state = tuple([np.random.randint(10) for i in range(self.num_digits)])
         self.current_state = self.initial_state
 
     def _take_deterministic_action(self, state, action):
@@ -39,11 +40,19 @@ class MNISTMDP(object):
     def get_current_state(self):
         return self.current_state
 
-    def get_all_actions(self, state):
-        if self.at_terminal(state=state):
-            return [(-1, -1)]
-        return [(i, 1) for i in range(self.num_digits)] + \
-               [(i, -1) for i in range(self.num_digits)]
+    def get_all_actions(self, state=None):
+        if state is None:
+            return [(i, 1) for i in range(self.num_digits)] + \
+                   [(i, -1) for i in range(self.num_digits)] + \
+                   [(-1, -1)]
+        else:
+            if self.at_terminal(state=state):
+                return [(-1, -1)]
+            return [(i, 1) for i in range(self.num_digits)] + \
+                   [(i, -1) for i in range(self.num_digits)]
+
+    def get_num_actions(self):
+        return len(self.get_all_actions())
 
     def get_transition_probs(self, state, action):
         successors = list()
@@ -89,7 +98,7 @@ class MNISTMDP(object):
     def at_terminal(self, state=None):
         if state is None:
             state = self.current_state
-        return state == self.terminal_state
+        return state == self.terminal_state or state == self.terminal_state2
 
     def at_goal(self, state=None):
         if state is None:
@@ -156,8 +165,14 @@ class DataGenerator(object):
         episodes = list()
         self.mdp.reset()
         for i in range(num_episodes):
+            if i % 1000 == 0 and i != 0:
+                eprint("{} episodes generated".format(i))
             episode = self.gen_episode()
             episodes.extend(episode)
+        eprint("[debug] finished generating episodes")
+        episodes = np.array(episodes)
+        with open('episodes_2_10000_random.npy', 'wb') as f:
+            np.save(f, episodes)
         return episodes
     
     def gen_episode(self, eps=0.2):
@@ -181,6 +196,10 @@ class DataGenerator(object):
         episode = state_to_image(episode, self.label_to_im_dict)
         return episode
 
+    def action_to_index(self, action):
+        all_actions = self.mdp.get_all_actions()
+        return all_actions.index(action)
+
     def get_estimated_qval(self, state, action, truncated_episode):
         assert truncated_episode[0][0] == state and truncated_episode[0][1] == action
         qval = 0
@@ -195,14 +214,7 @@ class DataGenerator(object):
             action = ep_lst[1]
             reward_lab = self.mdp.get_reward(state, action)
             qval_lab = self.get_estimated_qval(state, action, episode[i:])
+            ep_lst[1] = self.action_to_index(action)
             ep_lst.append(reward_lab)
             ep_lst.append(qval_lab)
-
-def main():
-    mdp = MNISTMDP(NUM_DIGITS)
-    data = DataGenerator(mdp)
-    episode = data.gen_episode()
-    
-
-if __name__=='__main__':
-    main()
+        return episode
