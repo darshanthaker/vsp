@@ -1,32 +1,40 @@
 import tensorflow as tf
+import argparse
 from pdb import set_trace
 from mdp import MNISTMDP, DataGenerator
 from util import *
 
 class SuccessorNetwork(object):
 
-
-    def __init__(self, num_train_episodes):
+    def __init__(self, num_train_episodes, deterministic=True, \
+            generate_new=False, path=''):
         self.num_train_episodes = num_train_episodes
-        self.mdp = MNISTMDP(NUM_DIGITS)
+        self.deterministic = deterministic
+        self.generate_new_episodes = generate_new
+        self.path = path
+        self.mdp = MNISTMDP(NUM_DIGITS, self.deterministic)
         self.num_actions = self.mdp.get_num_actions()
         self.get_train_data()
         self.get_test_data()
         self.create_compute_graph()
 
     def get_train_data(self):
-        datagen = DataGenerator(self.mdp)
-        self.train_episodes = datagen.gen_episodes(self.num_train_episodes)
-        #self.train_episodes = np.load('episodes_2_10000_random.npy')
-        set_trace()
+        self.datagen = DataGenerator(self.mdp)
+        if self.generate_new_episodes:
+            self.train_episodes = self.datagen.gen_episodes( \
+                self.num_train_episodes, self.path)
+        else:
+            self.train_episodes = np.load(self.path)
         self.train_images = np.array([ep[0] for ep in self.train_episodes])
         self.train_actions = np.array([ep[1] for ep in self.train_episodes])
         self.train_reward_labs = np.array([ep[2] for ep in self.train_episodes])
         self.train_qval_labs = np.array([ep[3] for ep in self.train_episodes])
 
     def get_test_data(self):
-        mnist = load_mnist_test('data/')
-        self.test_label_to_im_dict = mnist_label_to_image(mnist)
+        self.test_data = load_mnist_test('data/')
+        self.test_images = np.array(self.test_data[0])
+        self.test_labels = np.array(self.test_data[1])
+        self.test_label_to_im_dict = mnist_label_to_image(self.test_data)
 
     def create_compute_graph(self):
         self.inputs = tf.placeholder(tf.float32, (None, 28, 28, NUM_DIGITS), \
@@ -112,17 +120,64 @@ class SuccessorNetwork(object):
                 losss.append(loss)
 
             if epoch % 1 == 0 and epoch != 0:
-                self.evaluate(8)
-                self.evaluate(2) 
-                self.evaluate(9)
-                self.evaluate(0)
+                self.evaluate_full_test_set()
+                #self.evaluate_naive(8)
+                #self.evaluate_naive(2) 
+                #self.evaluate_naive(9)
+                #self.evaluate_naive(0)
             eprint('[%3d] Loss: %0.3f '%(epoch,np.mean(losss)))
-    
-    def evaluate(self, num):
+
+    def get_random_test_image(self, num):
         final_im = np.zeros((28, 28, 2))
         for j in range(2):
-            tmp_im = self.test_label_to_im_dict[num][0].reshape((28, 28))
+            pos = np.random.randint(len(self.test_label_to_im_dict[num]))
+            tmp_im = self.test_label_to_im_dict[num][pos].reshape((28, 28))
             final_im[:, :, j] = tmp_im
+        return final_im
+
+    def evaluate_full_test_set(self):
+        correct = 0
+        num_examples = 0
+        for i in range(0, self.test_images.shape[0]-NUM_DIGITS+1, NUM_DIGITS):
+            input_im = np.zeros((28, 28, NUM_DIGITS))
+            input_labs = list() 
+            c = 0
+            for j in range(i, i + NUM_DIGITS):
+                im = self.test_images[j].reshape((28, 28)) 
+                input_im[:, :, c] = im
+                c += 1
+                input_labs.append(self.test_labels[j])
+            if self.mdp.at_terminal(input_labs):
+                continue
+            actions_lst = self.evaluate(input_im)
+            max_qval = max([s[2] for s in actions_lst])
+            predicted_action = None
+            for a in actions_lst:
+                if a[2] == max_qval:
+                    predicted_action = a[0]
+            assert predicted_action is not None
+            gr_action = self.datagen.policy[tuple(input_labs)]
+            if gr_action == predicted_action:
+                correct += 1
+            num_examples += 1
+            #else:
+            #    set_trace()
+        accuracy = float(correct) / len(self.test_images)
+        eprint("Accuracy on full test set: {}".format(accuracy))
+
+    def evaluate(self, im):
+        actions_lst = list()
+        for i in range(self.num_actions - 1):
+            reward, qval = self.sess.run(
+                [self.net['reward'], self.net['qval']],
+                feed_dict={self.inputs: [im],
+                           self.actions_raw: [i]})
+            actions_lst.append((self.mdp.get_all_actions()[i], reward, qval))
+        return actions_lst
+    
+    # Mainly for debugging purposes.
+    def evaluate_naive(self, num):
+        final_im = self.get_random_test_image(num) 
         for i in range(self.num_actions - 1):
             reward, qval = self.sess.run(
                 [self.net['reward'], self.net['qval']],
@@ -132,9 +187,23 @@ class SuccessorNetwork(object):
             eprint("State ({}, {}) and action {} has reward {} with ground truth reward {} and qval {}".format(num, num, self.mdp.get_all_actions()[i], reward, gr_reward, qval))
              
 
-def main():
-    succ = SuccessorNetwork(10000)
+def main(deterministic, generate_new, path):
+    succ = SuccessorNetwork(10000, deterministic, generate_new, path)
     succ.train(0.005)
 
 if __name__=='__main__':
-    main()
+    parser = argparse.ArgumentParser(description='VSP')
+    parser.add_argument('--deterministic', help="")
+    parser.add_argument('--generate_new', help="")
+    parser.add_argument('--path', help="")
+    args = parser.parse_args()
+    if args.deterministic == 'False':
+        args.deterministic = False
+    else:
+        args.deterministic = True
+    if args.generate_new == 'True':
+        args.generate_new = True 
+    else:
+        args.generate_new = False
+    assert args.path != ''
+    main(args.deterministic, args.generate_new, args.path)

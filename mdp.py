@@ -67,16 +67,23 @@ class MNISTMDP(object):
                 new_state = self._take_deterministic_action(state, act)
                 successors.append((new_state, 0))
         else:
-            # Assume uniform probability over all possible actions.
-            num_actions = self.get_num_actions()
-            uniform_prob = 1.0/num_actions
+            # Assume uniform probability over all possible actions != action
+            # and 0.5 for action
+            num_actions = len(self.get_all_actions(state))
             new_state = self._take_deterministic_action(state, action)
-            successors.append((new_state, uniform_prob))
+            if num_actions == 1: # Only if terminal state, so edge case.
+                successors.append((new_state, 1))
+                return successors
+            else:
+                successors.append((new_state, 0.5))
+            uniform_prob = 0.5/(num_actions - 1)
             for act in self.get_all_actions(state):
                 if act == action:
                     continue
                 new_state = self._take_deterministic_action(state, act)
                 successors.append((new_state, uniform_prob))
+            sum_probs = sum([su[1] for su in successors])
+            assert np.isclose(np.array([sum_probs]), np.array([1]))
         return successors
               
     def get_reward(self, state, action, new_state=None):
@@ -178,7 +185,7 @@ class DataGenerator(object):
         eprint("[debug] finished value iteration")
         return values
 
-    def gen_episodes(self, num_episodes):
+    def gen_episodes(self, num_episodes, path):
         episodes = list()
         self.mdp.reset()
         for i in range(num_episodes):
@@ -188,7 +195,7 @@ class DataGenerator(object):
             episodes.extend(episode)
         eprint("[debug] finished generating episodes")
         episodes = np.array(episodes)
-        with open('episodes_2_10000_random_uniform.npy', 'wb') as f:
+        with open(path, 'wb') as f:
             np.save(f, episodes)
         return episodes
     
