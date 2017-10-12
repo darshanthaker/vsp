@@ -6,7 +6,7 @@ from pdb import set_trace
 from mnist import MNIST
 import tensorflow as tf
 
-NUM_DIGITS = 2
+NUM_DIGITS = 3
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)

@@ -64,12 +64,20 @@ class MNISTMDP(object):
             for act in self.get_all_actions(state):
                 if act == action:
                     continue
-                new_state = self._take_deterministic_action(state, action)
+                new_state = self._take_deterministic_action(state, act)
                 successors.append((new_state, 0))
         else:
-            pass
+            # Assume uniform probability over all possible actions.
+            num_actions = self.get_num_actions()
+            uniform_prob = 1.0/num_actions
+            new_state = self._take_deterministic_action(state, action)
+            successors.append((new_state, uniform_prob))
+            for act in self.get_all_actions(state):
+                if act == action:
+                    continue
+                new_state = self._take_deterministic_action(state, act)
+                successors.append((new_state, uniform_prob))
         return successors
-
               
     def get_reward(self, state, action, new_state=None):
         if self.at_terminal(state=state):
@@ -94,6 +102,15 @@ class MNISTMDP(object):
         if self.deterministic:
             self.current_state = self._take_deterministic_action(state, action)
             return self.current_state
+        else:
+            transition_probs = self.get_transition_probs(state, action)
+            act_prob = np.random.random()
+            cum_prob = 0
+            for (s, p) in transition_probs:
+                cum_prob += p
+                if act_prob <= cum_prob:
+                    self.current_state = s
+                    return self.current_state
 
     def at_terminal(self, state=None):
         if state is None:
@@ -171,7 +188,7 @@ class DataGenerator(object):
             episodes.extend(episode)
         eprint("[debug] finished generating episodes")
         episodes = np.array(episodes)
-        with open('episodes_2_10000_random.npy', 'wb') as f:
+        with open('episodes_2_10000_random_uniform.npy', 'wb') as f:
             np.save(f, episodes)
         return episodes
     

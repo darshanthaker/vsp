@@ -15,9 +15,10 @@ class SuccessorNetwork(object):
         self.create_compute_graph()
 
     def get_train_data(self):
-        #datagen = DataGenerator(self.mdp)
-        #self.train_episodes = datagen.gen_episodes(self.num_train_episodes)
-        self.train_episodes = np.load('episodes_2_10000_random.npy')
+        datagen = DataGenerator(self.mdp)
+        self.train_episodes = datagen.gen_episodes(self.num_train_episodes)
+        #self.train_episodes = np.load('episodes_2_10000_random.npy')
+        set_trace()
         self.train_images = np.array([ep[0] for ep in self.train_episodes])
         self.train_actions = np.array([ep[1] for ep in self.train_episodes])
         self.train_reward_labs = np.array([ep[2] for ep in self.train_episodes])
