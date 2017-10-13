@@ -1,0 +1,2 @@
+tensorflow-gpu
+python-mnist
