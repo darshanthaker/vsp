@@ -1,7 +1,8 @@
 import tensorflow as tf
 import argparse
 from pdb import set_trace
-from mdp import MNISTMDP, DataGenerator
+from mdp import MNISTMDP
+from datagen import DataGenerator
 from util import *
 
 class SuccessorNetwork(object):
