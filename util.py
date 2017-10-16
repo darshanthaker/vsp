@@ -7,9 +7,14 @@ from mnist import MNIST
 import tensorflow as tf
 
 NUM_DIGITS = 2
+NUM_EPISODES = 10000
+DETERMINISTIC_PROB = 0.5
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
+
+def mkdir(path):
+    os.system("mkdir -p {}".format(path))
 
 def load_mnist(path):
     mndata = MNIST(path)

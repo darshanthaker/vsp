@@ -1,5 +1,6 @@
 import tensorflow as tf
 import argparse
+import pickle
 from pdb import set_trace
 from mdp import MNISTMDP
 from datagen import DataGenerator
@@ -37,6 +38,10 @@ class SuccessorNetwork(object):
         self.test_labels = np.array(self.test_data[1])
         self.test_label_to_im_dict = mnist_label_to_image(self.test_data)
 
+    def serialize(self, lst, name):
+        with open(self.dir_name + '/' + name, 'wb') as fp:
+            pickle.dump(lst, fp)
+
     def create_compute_graph(self):
         self.inputs = tf.placeholder(tf.float32, (None, 28, 28, NUM_DIGITS), \
             name='inputs')
@@ -70,7 +75,14 @@ class SuccessorNetwork(object):
 
         self.net = net
 
+    def serialize(self, lst, name):
+        with open(self.dir_name + '/' + name, 'wb') as fp:
+            pickle.dump(lst, fp)
+
     def train(self, lr):
+        self.dir_name = '{}_{}_{}'.format(self.deterministic, \
+            NUM_EPISODES, DETERMINISTIC_PROB)
+        mkdir(self.dir_name)
         self.reward_loss = tf.reduce_mean(tf.losses.mean_squared_error( \
             self.reward_labels, \
             self.net['reward'])) 
@@ -89,6 +101,7 @@ class SuccessorNetwork(object):
         self.sess.run(tf.global_variables_initializer())
 
         BS = 64
+        accs = list()
         for epoch in range(100):
             # Let's shuffle the data every epoch
             np.random.seed(epoch)
@@ -100,7 +113,7 @@ class SuccessorNetwork(object):
             np.random.seed(epoch)
             np.random.shuffle(self.train_qval_labs)
             # Go through the entire dataset once
-            accs, losss = [], []
+            losss = []
             for i in range(0, self.train_images.shape[0]-BS+1, BS):
                 # Train a single batch
                 batch_images, batch_actions_raw, batch_reward_labs, \
@@ -121,16 +134,20 @@ class SuccessorNetwork(object):
                 losss.append(loss)
 
             if epoch % 1 == 0 and epoch != 0:
-                self.evaluate_full_test_set()
-                #self.evaluate_naive(8)
-                #self.evaluate_naive(2) 
-                #self.evaluate_naive(9)
-                #self.evaluate_naive(0)
+                accuracy = self.evaluate_full_test_set()
+                accs.append(accuracy)
+                self.serialize(accs, 'accs')
+                for i in range(1, 9):
+                    pred_action_freq = dict()
+                    for _ in range(100):
+                        pred_action_freq = self.evaluate_naive(i, pred_action_freq)
+                    self.serialize(pred_action_freq, \
+                        'pred_action_freq_{}_{}'.format(epoch, i))
             eprint('[%3d] Loss: %0.3f '%(epoch,np.mean(losss)))
 
     def get_random_test_image(self, num):
-        final_im = np.zeros((28, 28, 2))
-        for j in range(2):
+        final_im = np.zeros((28, 28, NUM_DIGITS))
+        for j in range(NUM_DIGITS):
             pos = np.random.randint(len(self.test_label_to_im_dict[num]))
             tmp_im = self.test_label_to_im_dict[num][pos].reshape((28, 28))
             final_im[:, :, j] = tmp_im
@@ -165,6 +182,7 @@ class SuccessorNetwork(object):
             #    set_trace()
         accuracy = float(correct) / len(self.test_images)
         eprint("Accuracy on full test set: {}".format(accuracy))
+        return accuracy
 
     def evaluate(self, im):
         actions_lst = list()
@@ -177,19 +195,26 @@ class SuccessorNetwork(object):
         return actions_lst
     
     # Mainly for debugging purposes.
-    def evaluate_naive(self, num):
+    def evaluate_naive(self, num, pred_action_freq=dict()):
         final_im = self.get_random_test_image(num) 
+        all_actions = self.mdp.get_all_actions()
+        qvals = list()
         for i in range(self.num_actions - 1):
             reward, qval = self.sess.run(
                 [self.net['reward'], self.net['qval']],
                 feed_dict={self.inputs: [final_im],
                            self.actions_raw: [i]})             
-            gr_reward = self.mdp.get_reward((num, num), self.mdp.get_all_actions()[i])
-            eprint("State ({}, {}) and action {} has reward {} with ground truth reward {} and qval {}".format(num, num, self.mdp.get_all_actions()[i], reward, gr_reward, qval))
-             
+            gr_reward = self.mdp.get_reward((num, num), all_actions[i])
+            qvals.append(qval) 
+        pred_action = all_actions[np.argmax(qvals)]
+        if pred_action not in pred_action_freq:
+            pred_action_freq[pred_action] = 1
+        else:
+            pred_action_freq[pred_action] += 1
+        return pred_action_freq
 
 def main(deterministic, generate_new, path):
-    succ = SuccessorNetwork(10000, deterministic, generate_new, path)
+    succ = SuccessorNetwork(NUM_EPISODES, deterministic, generate_new, path)
     succ.train(0.005)
 
 if __name__=='__main__':

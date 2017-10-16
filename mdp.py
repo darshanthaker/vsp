@@ -75,8 +75,8 @@ class MNISTMDP(object):
                 successors.append((new_state, 1))
                 return successors
             else:
-                successors.append((new_state, 0.5))
-            uniform_prob = 0.5/(num_actions - 1)
+                successors.append((new_state, DETERMINISTIC_PROB))
+            uniform_prob = DETERMINISTIC_PROB/(num_actions - 1)
             for act in self.get_all_actions(state):
                 if act == action:
                     continue
