@@ -7,6 +7,7 @@ class MNISTMDP(object):
     def __init__(self, num_digits, deterministic=True):
         self.num_digits = num_digits
         self.deterministic = deterministic
+        eprint("deterministic is {}".format(self.deterministic))
         #self.initial_state = tuple([5 for i in range(self.num_digits)])
         self.initial_state = tuple([np.random.randint(10) for i in range(self.num_digits)])
         self.terminal_state = tuple([9 for i in range(self.num_digits)])
@@ -76,7 +77,7 @@ class MNISTMDP(object):
                 return successors
             else:
                 successors.append((new_state, DETERMINISTIC_PROB))
-            uniform_prob = DETERMINISTIC_PROB/(num_actions - 1)
+            uniform_prob = (1.0 - DETERMINISTIC_PROB)/(num_actions - 1)
             for act in self.get_all_actions(state):
                 if act == action:
                     continue

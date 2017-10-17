@@ -16,6 +16,9 @@ def eprint(*args, **kwargs):
 def mkdir(path):
     os.system("mkdir -p {}".format(path))
 
+def normalize_dict(d, c):
+    return {k: (v / float(c)) for (k, v) in d.items()}
+
 def load_mnist(path):
     mndata = MNIST(path)
     mnist = mndata.load_training()

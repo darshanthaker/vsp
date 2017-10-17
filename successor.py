@@ -18,7 +18,7 @@ class SuccessorNetwork(object):
         self.num_actions = self.mdp.get_num_actions()
         self.get_train_data()
         self.get_test_data()
-        self.create_compute_graph()
+        self.create_inputs_compute_graph()
 
     def get_train_data(self):
         self.datagen = DataGenerator(self.mdp)
@@ -31,6 +31,7 @@ class SuccessorNetwork(object):
         self.train_actions = np.array([ep[1] for ep in self.train_episodes])
         self.train_reward_labs = np.array([ep[2] for ep in self.train_episodes])
         self.train_qval_labs = np.array([ep[3] for ep in self.train_episodes])
+        self.train_label_to_im_dict = self.datagen.label_to_im_dict
 
     def get_test_data(self):
         self.test_data = load_mnist_test('data/')
@@ -38,11 +39,7 @@ class SuccessorNetwork(object):
         self.test_labels = np.array(self.test_data[1])
         self.test_label_to_im_dict = mnist_label_to_image(self.test_data)
 
-    def serialize(self, lst, name):
-        with open(self.dir_name + '/' + name, 'wb') as fp:
-            pickle.dump(lst, fp)
-
-    def create_compute_graph(self):
+    def create_inputs_compute_graph(self):
         self.inputs = tf.placeholder(tf.float32, (None, 28, 28, NUM_DIGITS), \
             name='inputs')
         self.actions_raw = tf.placeholder(tf.int64, (None), name='actions_raw')
@@ -51,38 +48,41 @@ class SuccessorNetwork(object):
         self.qval_labels = tf.placeholder(tf.float32, (None), name='qval_labels')
         self.reward_labels = tf.placeholder(tf.float32, (None), name='reward_labels')
        
+    def create_compute_graph(self, scope='SRNet'):
         net = {}
-        net['conv1'] = conv_layer(self.inputs, 32, 5, 4)
-        net['conv2'] = conv_layer(net['conv1'], 64, 4, 2)
-        net['conv3'] = conv_layer(net['conv2'], 64, 3, 1)
-        net['conv3'] = tf.contrib.layers.flatten(net['conv3'])
-        net['fc1'] = fc_layer(net['conv3'], 64)
+        with tf.variable_scope(scope):
+            net['conv1'] = conv_layer(self.inputs, 32, 5, 4)
+            net['conv2'] = conv_layer(net['conv1'], 64, 4, 2)
+            net['conv3'] = conv_layer(net['conv2'], 64, 3, 1)
+            net['conv3'] = tf.contrib.layers.flatten(net['conv3'])
+            net['fc1'] = fc_layer(net['conv3'], 64)
 
-        net['fc2'] = fc_layer(self.actions, 64)
+            net['fc2'] = fc_layer(self.actions, 64)
 
-        net['concat1'] = tf.concat([net['fc1'], net['fc2']], 1)
+            net['concat1'] = tf.concat([net['fc1'], net['fc2']], 1)
 
-        net['fc3'] = fc_layer(net['concat1'], 64)
-        net['fc4'] = fc_layer(net['fc3'], 64)
+            net['fc3'] = fc_layer(net['concat1'], 64)
+            net['fc4'] = fc_layer(net['fc3'], 64)
 
-        net['fc5'] = fc_layer(net['concat1'], 64)
-        net['fc6'] = fc_layer(net['concat1'], 64)
-        
+            net['fc5'] = fc_layer(net['concat1'], 64)
+            net['fc6'] = fc_layer(net['concat1'], 64)
+            
 
-        w = tf.get_variable("w", [64])
-        net['reward'] = tf.reduce_sum(tf.multiply(w, net['fc4']), 1)
-        net['qval'] = tf.reduce_sum(tf.multiply(w, net['fc6']), 1)
+            w = tf.get_variable("w", [64])
+            net['reward'] = tf.reduce_sum(tf.multiply(w, net['fc4']), 1)
+            net['qval'] = tf.reduce_sum(tf.multiply(w, net['fc6']), 1)
 
-        self.net = net
+        return net
 
     def serialize(self, lst, name):
         with open(self.dir_name + '/' + name, 'wb') as fp:
             pickle.dump(lst, fp)
 
-    def train(self, lr):
+    def IL_train(self, lr):
         self.dir_name = '{}_{}_{}'.format(self.deterministic, \
             NUM_EPISODES, DETERMINISTIC_PROB)
         mkdir(self.dir_name)
+        self.net = self.create_compute_graph('SRNet_IL')
         self.reward_loss = tf.reduce_mean(tf.losses.mean_squared_error( \
             self.reward_labels, \
             self.net['reward'])) 
@@ -145,6 +145,74 @@ class SuccessorNetwork(object):
                         'pred_action_freq_{}_{}'.format(epoch, i))
             eprint('[%3d] Loss: %0.3f '%(epoch,np.mean(losss)))
 
+    def clone_network(self, from_vars, to_vars):
+        assert len(from_vars) == len(to_vars)
+        for (f, t) in zip(from_vars, to_vars):
+            t.assign(f) 
+
+    def RL_train(self, num_episodes):
+        assert self.deterministic == True
+        sr_net = self.create_compute_graph('SRNet_RL1') # theta
+        target_net = self.create_compute_graph('SRNet_RL2') # theta_hat
+        sr_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
+            "SRNet_RL1")
+        target_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
+            "SRNet_RL2")
+        # Make a clone of theta as target network theta_hat.
+        self.clone_network(sr_vars, target_vars)
+
+        # Initialize replay buffer D to size N.
+        self.replay_buffer = ReplayBuffer(1000)
+         
+        self.sess = tf.Session()
+        self.sess.run(tf.global_variables_initializer())
+
+        eps = 1.0 # exploration probability term.
+        for _ in range(num_episodes):
+            # Initialize an environment with random configuration.
+            self.mdp.reset()
+            while not self.mdp.at_terminal():
+                # Get agent's observation and internal state s_t from environment.
+                _mdp_state = self.mdp.get_current_state()  
+                state = get_random_train_image(_mdp_state)
+                # Compute Q_{s_t, a} = f(s_t,a ; theta) for every action a in state
+                # space.
+                actions_lst = self.evaluate(state, net=sr_net)
+                 
+                # With probability eps, select random action a_t, otherwise select
+                # a_t = argmax_a Q_{s_t, a}.
+                r = np.random.random()
+                act = None
+                if r <= eps:
+                    pos = np.random.randint(len(actions_lst)) 
+                    act = actions_lst[pos][0]
+                else: 
+                    qvals = [a[2] for a in actions_lst]
+                    act = actions_lst[np.argmax(qvals)][0]
+                # Execute action a_t to obtain immediate reward r_t and next state
+                # s_{t + 1}.
+                _mdp_new_state = self.mdp.do_transition(_mdp_state, act)
+                reward = self.mdp.get_reward(_mdp_state, act, _mdp_new_state)
+                # Store transition (s_t, a_t, r_t, s_{t + 1}) in D.
+                new_state = self.get_random_train_image(self, _mdp_new_state)
+                self.replay_buffer.store(state, act, reward, new_state)
+                # Sample random mini-batch of transition (s_j, a_j, r_j, s_{j + 1})
+                # from D.
+                transitions = self.replay_buffer.sample(32)
+                states = [t[0] for t in transitions]
+                actions = [t[1] for t in transitions]
+                true_rewards = [t[2] for t in transitions]
+                next_states = [t[3] for t in transitions] 
+                
+        
+    def get_random_train_image(self, nums):
+        final_im = np.zeros((28, 28, NUM_DIGITS))
+        for j in range(NUM_DIGITS):
+            pos = np.random.randint(len(self.train_label_to_im_dict[nums[j]]))
+            tmp_im = self.test_label_to_im_dict[nums[j]][pos].reshape((28, 28))
+            final_im[:, :, j] = tmp_im
+        return final_im
+
     def get_random_test_image(self, num):
         final_im = np.zeros((28, 28, NUM_DIGITS))
         for j in range(NUM_DIGITS):
@@ -175,7 +243,7 @@ class SuccessorNetwork(object):
                     predicted_action = a[0]
             assert predicted_action is not None
             gr_action = self.datagen.policy[tuple(input_labs)]
-            if gr_action == predicted_action:
+            if gr_action[1] == predicted_action[1]:
                 correct += 1
             num_examples += 1
             #else:
@@ -184,11 +252,13 @@ class SuccessorNetwork(object):
         eprint("Accuracy on full test set: {}".format(accuracy))
         return accuracy
 
-    def evaluate(self, im):
+    def evaluate(self, im, net=None):
+        if net is None:
+            net = self.net
         actions_lst = list()
         for i in range(self.num_actions - 1):
             reward, qval = self.sess.run(
-                [self.net['reward'], self.net['qval']],
+                [net['reward'], net['qval']],
                 feed_dict={self.inputs: [im],
                            self.actions_raw: [i]})
             actions_lst.append((self.mdp.get_all_actions()[i], reward, qval))
@@ -215,7 +285,7 @@ class SuccessorNetwork(object):
 
 def main(deterministic, generate_new, path):
     succ = SuccessorNetwork(NUM_EPISODES, deterministic, generate_new, path)
-    succ.train(0.005)
+    succ.RL_train(0.005)
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser(description='VSP')
