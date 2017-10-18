@@ -18,6 +18,9 @@ class MNISTMDP(object):
         self.invalid_reward = -5
         self.goal_reward = 10
 
+    def get_random_initial_state(self):
+        return tuple([np.random.randint(10) for i in range(self.num_digits)])
+
     def reset(self):
         self.initial_state = tuple([np.random.randint(10) for i in range(self.num_digits)])
         self.current_state = self.initial_state

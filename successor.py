@@ -81,8 +81,10 @@ class SuccessorNetwork(object):
             pickle.dump(lst, fp)
 
     def IL_train(self, lr):
-        self.dir_name = '{}_{}_{}'.format(self.deterministic, \
-            NUM_EPISODES, DETERMINISTIC_PROB)
+        eprint("DETERMINISTIC PROB IS {}".format(DETERMINISTIC_PROB))
+        #self.dir_name = '{}_{}_{}'.format(self.deterministic, \
+        #    NUM_EPISODES, DETERMINISTIC_PROB)
+        self.dir_name = 'RL_IL'
         mkdir(self.dir_name)
         self.net = self.create_compute_graph('SRNet_IL')
         self.reward_loss = tf.reduce_mean(tf.losses.mean_squared_error( \
@@ -104,7 +106,8 @@ class SuccessorNetwork(object):
 
         BS = 64
         accs = list()
-        for epoch in range(100):
+        all_losses = list()
+        for epoch in range(30):
             # Let's shuffle the data every epoch
             np.random.seed(epoch)
             np.random.shuffle(self.train_images)
@@ -135,7 +138,9 @@ class SuccessorNetwork(object):
                 #eprint('[MB %3d] L1 norm: %0.3f  \t  Loss: %0.3f'%(epoch, acc, loss))
                 losss.append(loss)
 
-            if epoch % 1 == 0 and epoch != 0:
+            all_losses.append(np.mean(losss))
+            self.serialize(all_losses, 'losses')
+            if epoch % 20 == 0 and epoch != 0:
                 accuracy = self.evaluate_full_test_set()
                 accs.append(accuracy)
                 self.serialize(accs, 'accs')
@@ -147,24 +152,36 @@ class SuccessorNetwork(object):
                         'pred_action_freq_{}_{}'.format(epoch, i))
             eprint('[%3d] Loss: %0.3f '%(epoch,np.mean(losss)))
 
-    def clone_network(self, from_vars, to_vars):
+    def clone_network(self, from_vars, to_vars, soft_update=False):
         assert len(from_vars) == len(to_vars)
+        tau = 0.1
+        assign_ops = list()
         for (f, t) in zip(from_vars, to_vars):
-            t.assign(f) 
+            if soft_update:
+                assign_op = t.assign(tau * f + (1 - tau) * t)
+            else:
+                assign_op = t.assign(f)
+            assign_ops.append(assign_op)
+        return assign_ops
 
     def RL_train(self, num_episodes):
         assert self.deterministic == True
-        sr_net = self.create_compute_graph('SRNet_RL1') # theta
+        self.dir_name = 'RL_IL'
+        mkdir(self.dir_name)
+        #sr_net = self.create_compute_graph('SRNet_RL1') # theta
+        sr_net = self.net
         target_net = self.create_compute_graph('SRNet_RL2') # theta_hat
+        #sr_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
+        #    "SRNet_RL1")
         sr_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
-            "SRNet_RL1")
+            "SRNet_IL")
         target_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
             "SRNet_RL2")
         # Make a clone of theta as target network theta_hat.
-        self.clone_network(sr_vars, target_vars)
+        assign_ops = self.clone_network(sr_vars, target_vars)
 
         # Initialize replay buffer D to size N.
-        self.replay_buffer = ReplayBuffer(1000)
+        self.replay_buffer = ReplayBuffer(10000)
 
         ####### COMPUTE GRAPH GENERATION ######
         self.reward_loss = tf.reduce_mean(tf.losses.mean_squared_error( \
@@ -175,16 +192,20 @@ class SuccessorNetwork(object):
             sr_net['phi_as'] + self.psi_labels, \
             sr_net['psi_as']))
         self.loss = self.reward_loss + self.psi_loss
-        self.optimizer = tf.train.AdamOptimizer(0.005)
+        self.optimizer = tf.train.AdamOptimizer(1e-4)
         self.minimizer = self.optimizer.minimize(self.loss, var_list=sr_vars)
          
         self.sess = tf.Session()
         self.sess.run(tf.global_variables_initializer())
+        self.sess.run(assign_ops)
 
         eps = 1.0 # exploration probability term.
+        accs = list()
+        all_losses = list()
         for epoch in range(num_episodes):
             # Initialize an environment with random configuration.
             self.mdp.reset()
+            #eprint("[debug] initial state is {}".format(self.mdp.get_current_state()))
             losss = list()
             while not self.mdp.at_terminal():
                 # Get agent's observation and internal state s_t from environment.
@@ -213,6 +234,10 @@ class SuccessorNetwork(object):
                 self.replay_buffer.store(state, act, reward, new_state, _mdp_new_state)
                 # Sample random mini-batch of transition (s_j, a_j, r_j, s_{j + 1})
                 # from D.
+                if not self.replay_buffer.full():
+                    continue
+                #self.serialize(self.replay_buffer.get_buffer(), 'replay_buffer_10000')
+                #eprint("[debug] Replay buffer is now full. Starting to train")
                 all_actions = self.mdp.get_all_actions()
                 transitions = self.replay_buffer.sample(32)
                 states = [t[0] for t in transitions]
@@ -238,14 +263,41 @@ class SuccessorNetwork(object):
                                self.reward_labels: true_rewards, \
                                self.psi_labels: psi_labels})
                 losss.append(l)
+            if len(losss) == 0:
+                continue
             # Anneal exploration term.    
-            eps = eps * 0.8
+            eps = eps * 0.99
             eps = max(eps, 0.1)
-            self.clone_network(sr_vars, target_vars)
+            assign_ops = self.clone_network(sr_vars, target_vars, soft_update=True)
+            self.sess.run(assign_ops)
+            all_losses.append(np.mean(losss))
+            self.serialize(all_losses, 'RL_losses')
             eprint('[%3d] Loss: %0.3f '%(epoch, np.mean(losss)))
+            if epoch % 10 != 0:
+                continue
             accuracy = self.evaluate_full_test_set(net=target_net)
-            
+            accs.append(accuracy)
+            self.serialize(accs, 'RL_accs')
+            self.generate_sample_episode(epoch, target_net)
+            for i in range(1, 9):
+                pred_action_freq = dict()
+                for _ in range(100):
+                    pred_action_freq = self.evaluate_naive(i, pred_action_freq, net=target_net)
+                self.serialize(pred_action_freq, \
+                        'RL_pred_action_freq_{}_{}'.format(epoch, i))
 
+    def generate_sample_episode(self, epoch, net):
+        state = self.mdp.get_random_initial_state()
+        ct = 0
+        while not self.mdp.at_terminal(state):
+            im = self.get_random_test_image(state) 
+            self.serialize(im, 'sample_episode_{}_{}'.format(epoch, ct))
+            actions_lst = self.evaluate(im, net=net)
+            qvals = [a[2] for a in actions_lst]
+            pred_action = actions_lst[np.argmax(qvals)][0]
+            state = self.mdp._take_deterministic_action(state, pred_action)
+            ct += 1
+          
     def get_successor_labels(self, next_states, next_actions_lst):
         labels = list()
         gamma = 0.99
@@ -272,11 +324,11 @@ class SuccessorNetwork(object):
             final_im[:, :, j] = tmp_im
         return final_im
 
-    def get_random_test_image(self, num):
+    def get_random_test_image(self, nums):
         final_im = np.zeros((28, 28, NUM_DIGITS))
         for j in range(NUM_DIGITS):
-            pos = np.random.randint(len(self.test_label_to_im_dict[num]))
-            tmp_im = self.test_label_to_im_dict[num][pos].reshape((28, 28))
+            pos = np.random.randint(len(self.test_label_to_im_dict[nums[j]]))
+            tmp_im = self.test_label_to_im_dict[nums[j]][pos].reshape((28, 28))
             final_im[:, :, j] = tmp_im
         return final_im
 
@@ -334,13 +386,15 @@ class SuccessorNetwork(object):
             return actions_lst
     
     # Mainly for debugging purposes.
-    def evaluate_naive(self, num, pred_action_freq=dict()):
-        final_im = self.get_random_test_image(num) 
+    def evaluate_naive(self, num, pred_action_freq=dict(), net=None):
+        if net is None:
+            net = self.net
+        final_im = self.get_random_test_image([num] * NUM_DIGITS) 
         all_actions = self.mdp.get_all_actions()
         qvals = list()
         for i in range(self.num_actions - 1):
             reward, qval = self.sess.run(
-                [self.net['reward'], self.net['qval']],
+                [net['reward'], net['qval']],
                 feed_dict={self.inputs: [final_im],
                            self.actions_raw: [i]})             
             gr_reward = self.mdp.get_reward((num, num), all_actions[i])
@@ -354,13 +408,15 @@ class SuccessorNetwork(object):
 
 def main(deterministic, generate_new, path):
     succ = SuccessorNetwork(NUM_EPISODES, deterministic, generate_new, path)
-    succ.RL_train(10)
+    succ.IL_train(0.0001)
+    succ.RL_train(10000)
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser(description='VSP')
     parser.add_argument('--deterministic', help="")
     parser.add_argument('--generate_new', help="")
     parser.add_argument('--path', help="")
+    parser.add_argument('--deterministic_prob', help="")
     args = parser.parse_args()
     if args.deterministic == 'False':
         args.deterministic = False
@@ -370,5 +426,6 @@ if __name__=='__main__':
         args.generate_new = True 
     else:
         args.generate_new = False
+    DETERMINISTIC_PROB = float(args.deterministic_prob)
     assert args.path != ''
     main(args.deterministic, args.generate_new, args.path)

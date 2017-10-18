@@ -17,3 +17,12 @@ class ReplayBuffer(object):
         if num > len(self.lst):
             return self.lst
         return random.sample(self.lst, num)
+
+    def full(self):
+        return len(self.lst) == self.N
+
+    def get_buffer(self):
+        return self.lst
+
+    def get_size(self):
+        return len(self.lst)
